@@ -1,0 +1,3 @@
+1. how to run on debug (reload)
+
+2. how to build db...
