@@ -12,6 +12,8 @@ import json
 from datetime import date, timedelta
 from dotenv import load_dotenv
 import os
+from common_utils import get_date_for_timeslot, get_deliveries_num_per_date, InvalidTimeSlotException, \
+    get_deliveries_num_per_timeslot
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///delivery-api.sqlite3'
@@ -20,6 +22,9 @@ db.init_app(app)
 load_dotenv()
 
 geoapify_key = os.getenv("GEO_APIFY_KEY")
+
+MAX_DELIVERIES_PER_DAY = 10
+MAX_DELIVERIES_PER_TIMESLOT = 2
 
 
 def required_params(schema):
@@ -62,11 +67,27 @@ def resolve_address():
     return parsed_address
 
 
+def get_max_capacity_error(max_capacity_reached, max_capacity_reached_for, max_capacity_reached_for_id):
+    return "Maximum business capacity (" + str(
+        max_capacity_reached) + ") reached for the requested " + max_capacity_reached_for + " " + str(
+        max_capacity_reached_for_id)
+
+
 @app.post('/deliveries')
 @required_params(DeliverySchema())
 def deliveries():
     input_json = request.get_json()
     timeslot_id = input_json['timeslotId']
+    if MAX_DELIVERIES_PER_TIMESLOT <= get_deliveries_num_per_timeslot(timeslot_id):
+        error = get_max_capacity_error(MAX_DELIVERIES_PER_TIMESLOT, "timeslot", timeslot_id)
+        return Response(error, status=400)
+    try:
+        timeslot_date = get_date_for_timeslot(timeslot_id)
+    except InvalidTimeSlotException:
+        return Response("Timeslot " + str(timeslot_id) + " not found", status=400)
+    if MAX_DELIVERIES_PER_DAY <= get_deliveries_num_per_date(timeslot_date):
+        error = get_max_capacity_error(MAX_DELIVERIES_PER_DAY, "date", timeslot_date)
+        return Response(error, status=400)
     user_id = input_json['userId']
     new_delivery = Delivery(user_id, timeslot_id)
     db.session.add(new_delivery)
