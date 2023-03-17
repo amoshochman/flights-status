@@ -14,12 +14,13 @@ from dotenv import load_dotenv
 import os
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///students.sqlite3'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///delivery-api.sqlite3'
 db.init_app(app)
 
 load_dotenv()
 
 geoapify_key = os.getenv("GEO_APIFY_KEY")
+
 
 def required_params(schema):
     def decorator(fn):
@@ -34,7 +35,9 @@ def required_params(schema):
                 }
                 return jsonify(error), 400
             return fn(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
@@ -80,6 +83,7 @@ def delete_delivery(delivery_id):
     db.session.commit()
     return as_dict(delivery)
 
+
 @app.get('/deliveries/daily')
 def deliveries_daily():
     deliveries = Delivery.query.join(Timeslot).filter(func.date(Timeslot.start_time) == date.today()).all()
@@ -94,6 +98,7 @@ def deliveries_weekly():
     deliveries = Delivery.query.join(Timeslot).filter(week_start <= func.date(Timeslot.start_time))
     deliveries = deliveries.filter(func.date(Timeslot.start_time) <= week_end).all()
     return [as_dict(delivery) for delivery in deliveries]
+
 
 if __name__ == '__main__':
     app.run(host='localhost', port=8000, debug=True, use_reloader=True)
