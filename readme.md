@@ -12,7 +12,8 @@ GEO_APIFY_KEY=<your personal key achieved in https://www.geoapify.com/>
 If running locally:
 
 1. run "python initialization.py", which will create and populate the DB
-2. run "flask run"
+2. install the requirements, for example through pip install -r requirements.txt
+3. run "flask run"
 
 If running on Docker: choose some name X and then
 
