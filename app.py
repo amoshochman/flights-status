@@ -121,5 +121,5 @@ def deliveries_weekly():
     return [as_dict(delivery) for delivery in deliveries]
 
 
-if __name__ == '__main__':
-    app.run(host='localhost', port=8000, debug=True, use_reloader=True)
+# if __name__ == '__main__':
+#     app.run(host='localhost', port=8000, debug=True, use_reloader=True)
