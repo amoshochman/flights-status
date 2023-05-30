@@ -1,23 +1,23 @@
-# A simple delivery API
+# A simple flights status app
 
-### Using Python, Flask, SQLAlchemy, SQLite, Marshmallow
+### Using Python, Flask, SQLAlchemy, SQLite
 
 **Instructions to run:**
 
-Git clone your project locally and then create a file called ".env" on the top level of the project including only the line:
-
-GEO_APIFY_KEY=<your personal key achieved in https://www.geoapify.com/>
-
-
-If running locally:
-
-1. run "python initialization.py", which will create and populate the DB
+1. run "FLASK_APP=app FLASK_DEBUG=1 flask run" - which will also create the DB
 2. install the requirements, for example through pip install -r requirements.txt
-3. run "flask run"
 
-If running on Docker: choose some name X and then
+In both cases:
+1. the server will expose the functions in port 5000.
+2. the functions exposed are:
+- /upload (post - should have a .csv file in form-data under "file" key)
+- /flights/airline_flight_id (get)
 
-1. docker build -t X .     
-2. sudo docker run -it -p 5000:5000 -d X  
+Implementation note:
+In a more complex or big project:
+- it should have better separation (controller, db calls, business logic). </br>
+Being the project so simple, I preferred to do it this way in order to not over-complicate it. 
+Having a multiplicity of short files makes it harder to understand.</br>
+- it should have a more robust error handling (This solution doesn't support uploading the file several times, it will raise ugly errors if passing the wrong file, etc)
 
-In both cases the server will expose the functions in port 5000.
+Enjoy. Any comment will be welcomed.

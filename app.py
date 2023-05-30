@@ -1,125 +1,80 @@
-from flask import Flask, request, jsonify, Response
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import func
-from marshmallow import ValidationError
-from models import Timeslot, Delivery, Address, db, as_dict
-from schemas import AddressSchema, OneLineAddressSchema, DeliverySchema
-from functools import wraps
-import requests
-from requests.structures import CaseInsensitiveDict
-import urllib.parse
-import json
-from datetime import date, timedelta
-from dotenv import load_dotenv
+import pandas as pd
+from flask import Flask, request, Response
+import logging
 import os
-from common_utils import get_date_for_timeslot, get_deliveries_num_per_date, InvalidTimeSlotException, \
-    get_deliveries_num_per_timeslot
+from models import db, Flight
+from datetime import timedelta
+from werkzeug.utils import secure_filename
 
-app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///delivery-api.sqlite3'
-db.init_app(app)
+MAX_SUCCESS_PER_DAY = 20
+MIN_HOUR_DIFF = 3
 
-load_dotenv()
+FLIGHT_ID = 'flight ID'
+ARRIVAL = 'Arrival'
+DEPARTURE = 'Departure'
+SUCCESS = 'success'
+FAIL = 'fail'
+TIME_FORMAT = "%H:%M:%S"
 
-geoapify_key = os.getenv("GEO_APIFY_KEY")
 
-MAX_DELIVERIES_PER_DAY = 10
-MAX_DELIVERIES_PER_TIMESLOT = 2
+def as_dict(my_object):
+    return {c.name: getattr(my_object, c.name) for c in my_object.__table__.columns}
 
 
-def required_params(schema):
-    def decorator(fn):
-        @wraps(fn)
-        def wrapper(*args, **kwargs):
+def create_app():
+    app = Flask(__name__)
+    app.logger.setLevel(logging.INFO)
+
+    with app.app_context():
+        db_file = os.environ.get('FLIGHTS_DB') or 'flights.db'
+        app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + db_file
+        app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+        db.init_app(app)
+        db.create_all()
+
+        @app.get('/flights/<string:airline_flight_id>')
+        def get_flight(airline_flight_id):
+            return [as_dict(flight) for flight in Flight.query.filter_by(airline_flight_id=airline_flight_id).all()]
+
+        def update_db(df):
+            df.columns = df.columns.str.strip()
             try:
-                schema.load(request.get_json())
-            except ValidationError as err:
-                error = {
-                    "status": "error",
-                    "messages": err.messages
-                }
-                return jsonify(error), 400
-            return fn(*args, **kwargs)
+                df.Arrival = pd.to_datetime(df.Arrival.str.strip())
+                df.Departure = pd.to_datetime(df.Departure.str.strip())
+            except pd._libs.tslibs.parsing.DateParseError:
+                return Response("invalid time format", status=400)
+            df.sort_values(by=ARRIVAL, inplace=True)
+            success_total = Flight.query.filter_by(success=SUCCESS).count()
+            for index, row in df.iterrows():
+                new_flight = Flight(row[FLIGHT_ID], row[ARRIVAL].strftime(TIME_FORMAT),
+                                    row[DEPARTURE].strftime(TIME_FORMAT))
+                if success_total >= MAX_SUCCESS_PER_DAY:
+                    new_flight.success = FAIL
+                else:
+                    time_diff_big_enough = (row.Departure - row.Arrival) >= timedelta(hours=MIN_HOUR_DIFF)
+                    if time_diff_big_enough:
+                        new_flight.success = SUCCESS
+                        success_total += 1
+                    else:
+                        new_flight.success = FAIL
+                db.session.add(new_flight)
+            db.session.commit()
+            return "upload done successfully"
 
-        return wrapper
+        @app.route('/upload', methods=['POST'])
+        def upload():
+            f = request.files.get('file')
+            if not f:
+                error = "file not provided"
+                return Response(error, status=400)
+            name = f.filename
+            extension = os.path.splitext(name)[1]
+            if extension != ".csv":
+                error = "extension is not csv"
+                return Response(error, status=400)
+            f.save(secure_filename(name))
+            df = pd.read_csv(name)
+            os.remove(name)
+            return update_db(df)
 
-    return decorator
-
-
-@app.post('/timeslots')
-@required_params(AddressSchema())
-def timeslots():
-    postcode = request.get_json()['postcode']
-    timeslots = Timeslot.query.filter_by(postcode=postcode).all()
-    return [as_dict(timeslot) for timeslot in timeslots]
-
-
-@app.post('/resolve-address')
-@required_params(OneLineAddressSchema())
-def resolve_address():
-    address = request.get_json()['searchTerm']
-    address_for_url = urllib.parse.quote(address)
-    url = "https://api.geoapify.com/v1/geocode/search?text=" + address_for_url + "&apiKey=" + geoapify_key
-    headers = CaseInsensitiveDict()
-    headers["Accept"] = "application/json"
-    resp = requests.get(url, headers=headers)
-    parsed_address = json.loads(resp.content)['query']['parsed']
-    return parsed_address
-
-
-def get_max_capacity_error(max_capacity_reached, max_capacity_reached_for, max_capacity_reached_for_id):
-    return "Maximum business capacity (" + str(
-        max_capacity_reached) + ") reached for the requested " + max_capacity_reached_for + " " + str(
-        max_capacity_reached_for_id)
-
-
-@app.post('/deliveries')
-@required_params(DeliverySchema())
-def deliveries():
-    input_json = request.get_json()
-    timeslot_id = input_json['timeslotId']
-    if MAX_DELIVERIES_PER_TIMESLOT <= get_deliveries_num_per_timeslot(timeslot_id):
-        error = get_max_capacity_error(MAX_DELIVERIES_PER_TIMESLOT, "timeslot", timeslot_id)
-        return Response(error, status=400)
-    try:
-        timeslot_date = get_date_for_timeslot(timeslot_id)
-    except InvalidTimeSlotException:
-        return Response("Timeslot " + str(timeslot_id) + " not found", status=400)
-    if MAX_DELIVERIES_PER_DAY <= get_deliveries_num_per_date(timeslot_date):
-        error = get_max_capacity_error(MAX_DELIVERIES_PER_DAY, "date", timeslot_date)
-        return Response(error, status=400)
-    user_id = input_json['userId']
-    new_delivery = Delivery(user_id, timeslot_id)
-    db.session.add(new_delivery)
-    db.session.commit()
-    return as_dict(new_delivery)
-
-
-@app.delete('/deliveries/<int:delivery_id>')
-def delete_delivery(delivery_id):
-    delivery = Delivery.query.get(delivery_id)
-    if not delivery:
-        return Response("Delivery " + str(delivery_id) + " not found", status=400)
-    delivery.status = "cancelled"
-    db.session.commit()
-    return as_dict(delivery)
-
-
-@app.get('/deliveries/daily')
-def deliveries_daily():
-    deliveries = Delivery.query.join(Timeslot).filter(func.date(Timeslot.start_time) == date.today()).all()
-    return [as_dict(delivery) for delivery in deliveries]
-
-
-@app.get('/deliveries/weekly')
-def deliveries_weekly():
-    weekday = date.today().weekday()
-    week_start = date.today() - timedelta(days=weekday)
-    week_end = week_start + timedelta(days=6)
-    deliveries = Delivery.query.join(Timeslot).filter(week_start <= func.date(Timeslot.start_time))
-    deliveries = deliveries.filter(func.date(Timeslot.start_time) <= week_end).all()
-    return [as_dict(delivery) for delivery in deliveries]
-
-
-# if __name__ == '__main__':
-#     app.run(host='localhost', port=8000, debug=True, use_reloader=True)
+    return app
